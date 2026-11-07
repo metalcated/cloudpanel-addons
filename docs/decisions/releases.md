@@ -70,6 +70,13 @@ installer, SHA-256 sums, and GitHub build provenance. Updates verify the
 checksum and repository-bound attestation before replacing the binary.
 `--skip-attestation` is an explicit operator override.
 
+The build binds both release checks and provenance verification to
+`RELEASE_REPO`, falling back to GitHub Actions' `GITHUB_REPOSITORY` and then
+the upstream repository. This is compiled into the binary, not read from the
+manager's runtime environment. The workflow also stamps its repository into
+the published bootstrap installer, so a fork's installer, notices, downloads
+and signature policy agree. A local fork build supplies `RELEASE_REPO`.
+
 The binary checks provenance itself with Sigstore's `@sigstore/verify`, the
 checks `gh attestation verify --repo --signer-workflow` makes: a SLSA
 provenance statement naming the artifact's SHA-256, signed in Sigstore's public
@@ -151,10 +158,21 @@ checksum could rewrite the binary, and authenticity is established upstream,
 when the release is downloaded and verified. A box with no usable earlier copy
 is told so rather than left looking rolled back.
 
-This rolls the two artifacts back and nothing else. Config files, units,
-templates and Nginx fragments the update had already written are the new
-version's and stay, so the failure message asks for a `repair`, which is what
-converges them.
+After restoring the artifacts, the outgoing process runs the restored binary's
+`repair --recovery` under the same operation lock with a two-minute deadline.
+That repair regenerates configuration, units, templates and Nginx integrations
+from the restored version before resuming its services. It rejects incomplete
+authentication or integrations, and refuses recovery while an unattended
+upgrade owns the configuration files. It skips routine addon upkeep and job
+pruning. The parent then restarts and individually checks the authentication
+socket, gateway and manager; a repair, restart or health failure is reported
+as incomplete recovery, rather than claiming service has been restored.
+
+This is convergence of managed integration files, not a filesystem snapshot
+or a reversal of arbitrary state migrations. Operator data and databases are
+not restored, unknown panel markup is still refused, and an older binary that
+does not implement recovery mode retains its own repair behavior. Keep a VM
+snapshot or a consistent backup for changes outside these integration files.
 
 After replacement, the outgoing process performs no provisioning. It re-runs
 the same update command through the installed binary with an internal flag that

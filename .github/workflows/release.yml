@@ -78,7 +78,10 @@ jobs:
         # attestation as the binaries, and behind the /releases/latest/download
         # redirect -- so the documented one-liner keeps working without anyone
         # editing a version number into the README after every tag.
-        run: install -m 0755 install.sh dist/install.sh
+        run: |
+          set -euo pipefail
+          sed "s|^REPO=.*|REPO=\"${GITHUB_REPOSITORY}\"|" install.sh > dist/install.sh
+          chmod 0755 dist/install.sh
 
       - name: Generate SHA256SUMS
         run: |

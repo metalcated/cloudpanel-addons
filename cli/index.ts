@@ -54,7 +54,7 @@ function usage(): void {
   clp-addons
   clp-addons install [<addon>...] [--local=DIR]
   clp-addons update [--version=vX.Y.Z] [--allow-prerelease] [--skip-attestation]
-  clp-addons repair [<addon>] [--quiet] [--anchors-only]
+  clp-addons repair [<addon>] [--quiet] [--anchors-only|--recovery]
   clp-addons status
   clp-addons uninstall <addon> --yes [--purge]
   clp-addons maintenance <domain> [on|off|status]

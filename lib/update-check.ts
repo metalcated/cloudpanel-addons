@@ -5,6 +5,7 @@
 // answer is cached for 15 minutes and refreshed by one call at a time.
 
 import { compareSemver, isPrerelease, newestRelease } from "./semver";
+import { RELEASE_REPO } from "./release-source";
 
 export interface CliUpdateInfo {
   current: string;
@@ -12,7 +13,6 @@ export interface CliUpdateInfo {
   hasUpdate: boolean;
 }
 
-const DEFAULT_REPO = "7heMech/cloudpanel-addons";
 const CACHE_TTL_MS = 15 * 60 * 1000;
 
 let cachedUpdate: { at: number; info: CliUpdateInfo | null } | null = null;
@@ -75,7 +75,7 @@ async function fetchLatestRelease(
  */
 export async function checkCliUpdate(
   currentVersion: string,
-  repo: string = DEFAULT_REPO,
+  repo: string = RELEASE_REPO,
   timeoutMs = 2500
 ): Promise<CliUpdateInfo | null> {
   // Development builds never check or trigger update warnings

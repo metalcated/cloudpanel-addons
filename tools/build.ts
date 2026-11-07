@@ -6,6 +6,10 @@ import { minifyAssetsPlugin } from "./browser-assets";
 // VERSION, set by the release workflow, is the version the binary reports.
 
 const version = process.env.VERSION;
+const repository = process.env.RELEASE_REPO ?? process.env.GITHUB_REPOSITORY ?? "7heMech/cloudpanel-addons";
+if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(repository)) {
+  throw new Error("RELEASE_REPO must be a GitHub owner/repository");
+}
 
 await Bun.build({
   entrypoints: ["cli/index.ts"],
@@ -13,7 +17,10 @@ await Bun.build({
   bytecode: true,
   minify: true,
   format: "esm",
-  define: version ? { "process.env.CLP_ADDONS_VERSION": JSON.stringify(version) } : {},
+  define: {
+    CLP_ADDONS_REPOSITORY: JSON.stringify(repository),
+    ...(version ? { "process.env.CLP_ADDONS_VERSION": JSON.stringify(version) } : {}),
+  },
   plugins: [await minifyAssetsPlugin()],
   throw: true,
 });

@@ -6,7 +6,8 @@ import {
   MANAGER_UNIT,
 } from "./paths";
 import { type FetchedArtifact } from "./release";
-import { fatal, log, tryRun, writeAtomic } from "./util";
+import { fatal, log, run, tryRun, writeAtomic } from "./util";
+import { operationLockEnv } from "./operation-lock";
 import {
   copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync,
 } from "node:fs";
@@ -181,13 +182,25 @@ export function rollbackUpdate(previousVersion: string, reason: string): never {
       `run 'clp-addons repair' and check 'systemctl status ${MANAGER_UNIT}'`,
     );
   }
+  try {
+    // Re-enter the restored executable while retaining the parent's operation
+    // lock. Its definitions must replace any units and integrations the failed
+    // version wrote before services resume. Recovery skips routine pruning.
+    run(CLI_BIN, ["repair", "--recovery"], {
+      env: operationLockEnv(), timeout: 120_000, stdio: "inherit",
+    });
+  } catch (error) {
+    fatal(`restored clp-addons ${previousVersion}, but integration recovery failed: ${error instanceof Error ? error.message : String(error)}; run 'clp-addons repair --recovery' before using the addons`);
+  }
   const restart = tryRun("systemctl", ["restart", AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT, MANAGER_UNIT]);
-  if (!restart.ok) log.err(`the background services did not restart: ${restart.out}`);
-  // Only the two artifacts come back. Whatever the update had already written
-  // -- config files, units, templates, Nginx fragments -- is the new version's
-  // and stays, which is what repair exists to converge.
+  if (!restart.ok) fatal(`restored clp-addons ${previousVersion}, but the background services did not restart: ${restart.out}`);
+  for (const unit of [AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT, MANAGER_UNIT]) {
+    if (!tryRun("systemctl", ["is-active", "--quiet", unit]).ok) {
+      fatal(`restored clp-addons ${previousVersion}, but ${unit} is not active; check its service log`);
+    }
+  }
   fatal(
     `rolled the binary and its manifest back; the box is running clp-addons ${previousVersion}. ` +
-    `Run 'clp-addons repair' to reconcile anything the update had already written`,
+    `The restored binary reconciled its integrations and the background services are active`,
   );
 }

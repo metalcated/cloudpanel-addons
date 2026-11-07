@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { RELEASE_REPO } from "../lib/release-source";
 
 // Read by cli/action-common.ts, which cannot own it: that module opens FFI at
 // import time, and every consumer of this leaf would then pay for it.
@@ -6,7 +7,7 @@ export const PANEL_IDENTITY_PATH = "/etc/clp-addons/panel-identity.conf";
 
 export { mountPath } from "../lib/mount";
 
-export const REPO = "7heMech/cloudpanel-addons";
+export const REPO = RELEASE_REPO;
 export const CLI_ARTIFACT = "clp-addons-linux-x64";
 export const CLI_BIN = "/usr/local/bin/clp-addons";
 export const LIBEXEC_DIR = "/usr/local/libexec/clp-addons";

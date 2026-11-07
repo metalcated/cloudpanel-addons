@@ -41,9 +41,9 @@ function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
     rmSync(LEGACY_GH, { force: true });
     installUnits(specs);
     ensureDirs(specs);
-    reconcileAnchors(false);
-    if (!reconcileMaintenanceNginx(false)) log.warn("Nginx maintenance check needs manual repair");
-    if (!reconcileNginx(false)) log.warn("Nginx proxy needs manual repair");
+    if (!reconcileAnchors(false)) fatal("CloudPanel template integration failed during update");
+    if (!reconcileMaintenanceNginx(false)) fatal("Nginx maintenance integration failed during update");
+    if (!reconcileNginx(false)) fatal("Nginx proxy integration failed during update");
     reconcilePhpGuard(true);
     startUnits({ beforeManagerRestart });
     // Addon upkeep, such as a changed guard System Tweaks installs, would

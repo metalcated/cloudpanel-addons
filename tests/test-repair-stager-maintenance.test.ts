@@ -334,3 +334,42 @@ test.serial("repair leaves Nginx's conffiles alone while an unattended upgrade h
   expect(result.status, result.stderr).toBe(0);
   expect(JSON.parse(result.stdout.trim().split("\n").pop() ?? "")).toEqual([]);
 });
+
+test.each(["none", "templates", "proxy", "upgrade", "auth"])("recovery checks %s and skips routine cleanup", (failure) => {
+  const script = `${mockPrelude}
+    const failure = ${JSON.stringify(failure)};
+    const order = [];
+    const provision = await import("./cli/provision.ts");
+    mock.module("./cli/provision.ts", () => ({ ...provision,
+      installUnits: () => ({ systemd: true }),
+      startUnits: () => order.push("services"),
+      ensureAuthHelperReady: () => { if (failure === "auth") throw new Error("auth unavailable"); },
+    }));
+    mock.module("./cli/conffiles.ts", () => ({ conffilesReleased: () => failure === "upgrade" }));
+    mock.module("./cli/reconcile.ts", () => ({
+      reconcileAnchors: () => { order.push("templates"); return failure !== "templates"; },
+      reconcileMaintenanceNginx: () => { order.push("maintenance"); return true; },
+      reconcileNginx: () => { order.push("proxy"); return failure !== "proxy"; },
+      reconcilePhpMyAdminRules: () => {},
+    }));
+    mock.module("./cli/addon-hooks.ts", () => ({
+      runAddonRepairs: () => { throw new Error("routine upkeep ran during recovery"); },
+      runManagerRepair: () => { throw new Error("routine pruning ran during recovery"); },
+    }));
+    const { cmdRepair } = await import("./cli/repair.ts");
+    let error = null;
+    try { await cmdRepair(["--recovery"]); }
+    catch (e) { error = e.message; }
+    process.stdout.write(JSON.stringify({ order, error }));
+  `;
+  const result = spawnSync(process.execPath, ["-e", script], { cwd: repo, encoding: "utf8" });
+  expect(result.status, result.stderr).toBe(0);
+  const output = JSON.parse(result.stdout.trim().split("\n").pop() ?? "") as { order: string[]; error: string | null };
+  if (failure === "none") {
+    expect(output.error).toBeNull();
+    expect(output.order).toEqual(["templates", "maintenance", "proxy", "services"]);
+  } else {
+    expect(output.error).toContain(failure === "upgrade" ? "unattended upgrade" : "integration recovery incomplete");
+    expect(output.order).not.toContain("services");
+  }
+});

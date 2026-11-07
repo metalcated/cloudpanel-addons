@@ -22,15 +22,21 @@ import { existsSync } from "node:fs";
 export async function cmdRepair(argv: string[]): Promise<void> {
   requireRoot("repair");
   const { positional, flags } = parseFlags(argv);
+  if (flags.recovery === true && (positional.length > 0 || flags["anchors-only"] === true)) {
+    fatal("--recovery requires a full repair without an addon or --anchors-only");
+  }
   const anchorsOnly = flags["anchors-only"] === true;
   return withOperationLock(anchorsOnly ? "repair --anchors-only" : "repair", () => applyRepair(positional, flags));
 }
 
 async function applyRepair(positional: string[], flags: Record<string, string | true>): Promise<void> {
   const quiet = flags.quiet === true;
+  const recovery = flags.recovery === true;
+  const problems: string[] = [];
   if (conffilesReleased()) {
     // An unattended upgrade has the package's own text in Nginx's conffiles;
     // `apt-hook post` runs repair once it is done.
+    if (recovery) fatal("integration recovery cannot run while an unattended upgrade owns the configuration files");
     if (!quiet) log.warn("an unattended upgrade is running; repair waits for it to finish");
     return;
   }
@@ -67,6 +73,7 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
   try {
     ensureAuthHelperReady();
   } catch (error) {
+    if (recovery) problems.push("panel auth helper check failed");
     log.warn(`panel auth helper check failed, continuing without it: ${error instanceof Error ? error.message : String(error)}`);
   }
   for (const spec of all) {
@@ -77,23 +84,36 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
   reconcilePanelIdentity(quiet);
   const unitChanges = installUnits(all);
   ensureDirs(all);
-  if (unitChanges.systemd || unitActive(MANAGER_UNIT) !== "active" || managerSocketProblem() !== null) startUnits();
-  else {
-    ensureTimerArmed("clp-addons-reconcile.timer", quiet);
-    if (all.some((spec) => spec.newSites)) ensurePathWatching(NEW_SITES_PATH, quiet);
-    if (all.some((spec) => spec.certificates)) ensurePathWatching(CERTIFICATES_PATH, quiet);
-    if (all.some((spec) => spec.firewall)) ensurePathWatching(FIREWALL_PATH, quiet);
+  const resumeServices = () => {
+    if (unitChanges.systemd || unitActive(MANAGER_UNIT) !== "active" || managerSocketProblem() !== null) startUnits();
+    else {
+      ensureTimerArmed("clp-addons-reconcile.timer", quiet);
+      if (all.some((spec) => spec.newSites)) ensurePathWatching(NEW_SITES_PATH, quiet);
+      if (all.some((spec) => spec.certificates)) ensurePathWatching(CERTIFICATES_PATH, quiet);
+      if (all.some((spec) => spec.firewall)) ensurePathWatching(FIREWALL_PATH, quiet);
+    }
+  };
+  if (!recovery) resumeServices();
+  if (!reconcileAnchors(quiet)) problems.push("CloudPanel template integration is not ready");
+  if (!reconcileMaintenanceNginx(quiet)) {
+    problems.push("Nginx maintenance check is not ready");
+    log.err("Nginx maintenance check is not ready; fix the problem above, then run repair again");
   }
-  reconcileAnchors(quiet);
-  if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; fix the problem above, then run repair again");
-  if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
+  if (!reconcileNginx(quiet)) {
+    problems.push("Nginx proxy is not ready");
+    log.err("Nginx proxy is not ready; run repair after checking the master vhost");
+  }
   reconcilePhpGuard(true, quiet);
+  if (recovery && problems.length) fatal(`integration recovery incomplete: ${problems.join("; ")}`);
+  if (recovery) resumeServices();
   // Runs after the master-vhost reconciliation above, not before: recovering
   // a carried-over vhost also does its own `nginx -t` before reloading, and
   // skips the reload if that check fails. Running prune first, while the
   // master vhost might still be broken, would leave a just-restored site
   // vhost on disk but unloaded until the next 15-minute cycle.
-  await runAddonRepairs(all);
-  runManagerRepair();
+  if (!recovery) {
+    await runAddonRepairs(all);
+    runManagerRepair();
+  }
   if (!quiet) log.ok(`repair complete (${specs.map((spec) => spec.name).join(", ") || "no addon enabled"})`);
 }

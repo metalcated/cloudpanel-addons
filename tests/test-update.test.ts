@@ -14,6 +14,11 @@ let artifactsAvailable = false;
 let artifactTampered = false;
 let resolvedReleaseTag = "v1.2.3";
 let handoffFailure = false;
+let recoveryFailure = false;
+let restartFailure = false;
+let inactiveRecoveredUnit = false;
+let recoveryLock: string | undefined;
+let recoveryTimeout: number | undefined;
 let manifestWriteFailure = false;
 let previousIsSecure = true;
 let keepAsideFailure = false;
@@ -58,6 +63,11 @@ const provisioning = {
 function resetProvisioning(): void {
   resolvedReleaseTag = "v1.2.3";
   handoffFailure = false;
+  recoveryFailure = false;
+  restartFailure = false;
+  inactiveRecoveredUnit = false;
+  recoveryLock = undefined;
+  recoveryTimeout = undefined;
   manifestWriteFailure = false;
   previousIsSecure = true;
   keepAsideFailure = false;
@@ -264,13 +274,20 @@ mock.module("../cli/util", () => ({
     return { positional: argv.filter((arg) => !arg.startsWith("--")), flags };
   },
   requireRoot: () => {},
-  run: (cmd: string, args: string[]) => {
+  run: (cmd: string, args: string[], options?: { env?: NodeJS.ProcessEnv; timeout?: number }) => {
     calls.push(`run:${cmd} ${args.join(" ")}`);
     if (handoffFailure && cmd === CLI_BIN && args[0] === "update") throw new Error("target handoff failed");
+    if (cmd === CLI_BIN && args[0] === "repair") {
+      recoveryLock = options?.env?.CLP_ADDONS_IN_OPERATION;
+      recoveryTimeout = options?.timeout;
+      if (recoveryFailure) throw new Error("restored templates could not be reconciled");
+    }
     return "";
   },
   tryRun: (cmd: string, args: string[]) => {
     calls.push(`tryRun:${cmd} ${args.join(" ")}`);
+    if (cmd === "systemctl" && args[0] === "restart" && restartFailure) return { ok: false, out: "restart refused" };
+    if (cmd === "systemctl" && args[0] === "is-active" && args.at(-1) === "clp-addons.service" && inactiveRecoveredUnit) return { ok: false, out: "inactive" };
     return { ok: true, out: "" };
   },
   writeAtomic: (path: string) => {
@@ -418,8 +435,41 @@ test("a failed target-binary handoff rolls back without outgoing-process provisi
   expect(calls).toContain(`rename:${CLI_BIN}.rollback->${CLI_BIN}`);
   expect(calls).toContain(`rename:${ARTIFACT_MANIFEST_PATH}.rollback->${ARTIFACT_MANIFEST_PATH}`);
   expect(calls).toContain("tryRun:systemctl restart clp-addons-auth.socket clp-addons-auth.service clp-addons.service");
+  const recovery = `run:${CLI_BIN} repair --recovery`;
+  expect(calls.indexOf(recovery)).toBeGreaterThan(calls.indexOf(`rename:${CLI_BIN}.rollback->${CLI_BIN}`));
+  expect(calls.indexOf(recovery)).toBeLessThan(calls.indexOf("tryRun:systemctl restart clp-addons-auth.socket clp-addons-auth.service clp-addons.service"));
+  expect(recoveryLock).toBe("update");
+  expect(recoveryTimeout).toBe(120_000);
   expect(present.has(CLI_BIN)).toBe(true);
   expect(present.has(ARTIFACT_MANIFEST_PATH)).toBe(true);
+});
+
+test("a rollback whose integration recovery fails does not report restored service", async () => {
+  calls.length = 0;
+  resetProvisioning();
+  artifactsAvailable = false;
+  resolvedReleaseTag = "v1.3.0";
+  handoffFailure = true;
+  recoveryFailure = true;
+  try {
+    await expect(cmdUpdate([])).rejects.toThrow("integration recovery failed");
+    expect(calls).not.toContain("tryRun:systemctl restart clp-addons-auth.socket clp-addons-auth.service clp-addons.service");
+  } finally { resetProvisioning(); }
+});
+
+test.each([
+  { failure: "restart", message: "background services did not restart" },
+  { failure: "inactive", message: "clp-addons.service is not active" },
+])("rollback reports a $failure failure after restoring integrations", async ({ failure, message }) => {
+  calls.length = 0;
+  resetProvisioning();
+  artifactsAvailable = false;
+  resolvedReleaseTag = "v1.3.0";
+  handoffFailure = true;
+  restartFailure = failure === "restart";
+  inactiveRecoveredUnit = failure === "inactive";
+  try { await expect(cmdUpdate([])).rejects.toThrow(message); }
+  finally { resetProvisioning(); }
 });
 
 test("an update takes the operation lock before it writes anything, and releases it", async () => {
